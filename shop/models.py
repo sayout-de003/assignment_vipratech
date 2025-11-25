@@ -4,8 +4,14 @@ from django.conf import settings
 
 class Product(models.Model):
     name = models.CharField(max_length=120)
-    price = models.PositiveIntegerField(help_text='Amount in smallest currency unit e.g., paise (₹)')
+    price = models.FloatField(help_text='Amount in INR, e.g., 499.50')
     description = models.TextField(blank=True)
+    currency = models.CharField(max_length=3, default='inr')
+
+    @property
+    def price_in_paise(self):
+        return int(self.price * 100)
+
 
     def __str__(self):
         return self.name

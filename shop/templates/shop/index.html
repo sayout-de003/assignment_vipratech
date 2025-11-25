@@ -28,7 +28,7 @@
               {% for p in products %}
               <tr>
                 <td>{{ p.name }}</td>
-                <td>{{ p.price_display }}</td>
+                <td>{{ p.price}}</td>
                 <td>
                   <input type="number" min="0" value="0" class="form-control qty-input"
                          data-product-id="{{ p.id }}">

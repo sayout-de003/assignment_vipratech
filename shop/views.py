@@ -16,6 +16,9 @@ from .models import Product, Order, OrderItem
 from django.db import transaction
 from django.contrib.auth import get_user_model, logout
 
+import logging
+logger = logging.getLogger(__name__)
+
 @csrf_protect
 def signup(request):
     import logging
@@ -83,40 +86,126 @@ async def index(request):
 # -----------------------
 # Create checkout session (async view that delegates blocking calls)
 # -----------------------
+# @require_POST
+# async def create_checkout_session(request):
+#     try:
+#         data = json.loads(request.body)
+#     except json.JSONDecodeError:
+#         return JsonResponse({'error': 'invalid json'}, status=400)
+
+#     items = data.get('items', [])
+#     if not items:
+#         return JsonResponse({'error': 'no items'}, status=400)
+
+#     # Build line_items by fetching products (sync) via sync_to_async
+#     line_items = []
+#     for it in items:
+#         try:
+#             p = await sync_to_async(Product.objects.get)(pk=int(it['product_id']))
+#         except Exception:
+#             continue
+#         qty = max(0, int(it.get('quantity', 0)))
+#         if qty <= 0:
+#             continue
+#         line_items.append({
+#             'price_data': {
+#                 'currency': p.currency,
+#                 'product_data': {'name': p.name},
+#                 'unit_amount':p.price_in_paise, 
+#             },
+#             'quantity': qty,
+#         })
+
+#     if not line_items:
+#         return JsonResponse({'error': 'no valid items'}, status=400)
+
+#     # Create Stripe checkout session — blocking call; run in thread via sync_to_async
+#     def _create_session():
+#         return stripe.checkout.Session.create(
+#             payment_method_types=['card'],
+#             line_items=line_items,
+#             mode='payment',
+#             success_url=request.build_absolute_uri('/?session_id={CHECKOUT_SESSION_ID}'),
+#             cancel_url=request.build_absolute_uri('/'),
+#         )
+
+#     try:
+#         session = await sync_to_async(_create_session, thread_sensitive=True)()
+#     except Exception as e:
+#         return JsonResponse({'error': 'stripe error', 'details': str(e)}, status=500)
+
+#     # Return session id to client
+#     return JsonResponse({'id': session.id})
+
+
+import json
+import logging
+import stripe
+from django.conf import settings
+from django.http import JsonResponse
+from asgiref.sync import sync_to_async
+from .models import Product
+
+logger = logging.getLogger(__name__)
+
+stripe.api_key = settings.STRIPE_SECRET_KEY
+
 @require_POST
 async def create_checkout_session(request):
+    """
+    Async view to create Stripe checkout session for given items.
+    """
     try:
         data = json.loads(request.body)
     except json.JSONDecodeError:
+        logger.error("Invalid JSON received")
         return JsonResponse({'error': 'invalid json'}, status=400)
 
     items = data.get('items', [])
     if not items:
+        logger.warning("No items provided in request")
         return JsonResponse({'error': 'no items'}, status=400)
 
-    # Build line_items by fetching products (sync) via sync_to_async
     line_items = []
+
     for it in items:
         try:
-            p = await sync_to_async(Product.objects.get)(pk=int(it['product_id']))
-        except Exception:
+            product_id = int(it.get('product_id'))
+            qty = max(1, int(it.get('quantity', 1)))  # Ensure at least 1
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid product_id or quantity: {it}")
             continue
-        qty = max(0, int(it.get('quantity', 0)))
-        if qty <= 0:
+
+        try:
+            p = await sync_to_async(Product.objects.get)(pk=product_id)
+        except Product.DoesNotExist:
+            logger.warning(f"Product not found: id={product_id}")
             continue
-        line_items.append({
+
+        if p.price <= 0:
+            logger.warning(f"Product has invalid price: {p.name} = {p.price}")
+            continue
+
+        line_item = {
             'price_data': {
-                'currency': p.currency,
-                'product_data': {'name': p.name},
-                'unit_amount': p.price_cents,
+                'currency': p.currency.lower(),  # stripe requires lowercase ISO code
+                'product_data': {
+                    'name': p.name,
+                    'description': p.description or "",
+                },
+                'unit_amount': p.price_in_paise,  # integer paise
             },
             'quantity': qty,
-        })
+        }
+
+        logger.info(f"Adding line_item for Stripe: {line_item}")
+        line_items.append(line_item)
 
     if not line_items:
+        logger.error("No valid line_items to send to Stripe")
         return JsonResponse({'error': 'no valid items'}, status=400)
 
-    # Create Stripe checkout session — blocking call; run in thread via sync_to_async
+    # Function to create Stripe session
     def _create_session():
         return stripe.checkout.Session.create(
             payment_method_types=['card'],
@@ -128,11 +217,15 @@ async def create_checkout_session(request):
 
     try:
         session = await sync_to_async(_create_session, thread_sensitive=True)()
-    except Exception as e:
+        logger.info(f"Stripe session created successfully: {session.id}")
+        return JsonResponse({'id': session.id})
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe API error: {e}")
         return JsonResponse({'error': 'stripe error', 'details': str(e)}, status=500)
+    except Exception as e:
+        logger.exception(f"Unexpected error creating Stripe session: {e}")
+        return JsonResponse({'error': 'unexpected error', 'details': str(e)}, status=500)
 
-    # Return session id to client
-    return JsonResponse({'id': session.id})
 
 
 # -----------------------
