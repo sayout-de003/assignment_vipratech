@@ -1,0 +1,41 @@
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.swp
+*.swo
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Django stuff
+*.log
+*.pot
+*.py[cod]
+db.sqlite3
+/media
+/staticfiles/
+migrations/
+*/migrations/*.py
+*/migrations/*.pyc
+
+# Environment variables
+.env
+.env.*
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# MacOS
+.DS_Store
+
+# Misc
+*.sqlite3
+*.egg-info/
+dist/
+build/
